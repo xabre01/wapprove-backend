@@ -1,0 +1,195 @@
+// Definisi Enum
+enum UserRole {
+  ADMIN
+  STAFF
+  MANAGER
+  DIRECTOR
+  PURCHASING
+}
+
+enum ApproverType {
+  MANAGER
+  DIRECTOR
+  PURCHASING
+}
+
+enum RequestStatus {
+  DRAFT
+  PENDING_MANAGER_APPROVAL
+  MANAGER_APPROVED
+  PENDING_DIRECTOR_APPROVAL
+  DIRECTOR_APPROVED
+  PENDING_PURCHASING_APPROVAL
+  PURCHASING_APPROVED
+  FULLY_APPROVED
+  REJECTED
+  IN_PROCESS
+  COMPLETED
+  CANCELLED
+  ON_HOLD
+}
+
+enum UrgencyLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ApprovalStatus {
+  APPROVED
+  REJECTED
+  PENDING
+}
+
+enum ItemCategory {
+  FURNITURE // Perabotan
+  ELECTRONICS // Barang elektronik
+  OFFICE_SUPPLIES // Alat tulis kantor
+  COMPUTER_ACCESSORIES // Aksesoris komputer
+  MAINTENANCE // Peralatan pemeliharaan
+  OTHERS // Lain-lain
+}
+
+enum NotificationType {
+  REQUEST_CREATED
+  PENDING_APPROVAL
+  REQUEST_APPROVED
+  REQUEST_REJECTED
+  FULLY_APPROVED
+  IN_PROCESS
+  COMPLETED
+  CANCELLED
+}
+
+Table ACCOUNT {
+  id integer [primary key, increment, not null]
+  user_id integer [unique, not null, ref: > USER.id]
+  password varchar(255) [not null] // Hashed password
+  is_locked boolean [default: false]
+  last_login timestamp
+  created_at timestamp [default: `now()`, not null]
+  updated_at timestamp
+
+  indexes {
+    user_id [unique]
+  }
+}
+
+Table USER {
+  id integer [primary key, increment, not null]
+  role UserRole [not null]
+  name varchar(100) [not null]
+  email varchar(100) [unique, not null]
+  phone_number varchar(20)
+  is_active boolean [default: true, not null]
+  created_at timestamp [default: `now()`, not null]
+  updated_at timestamp
+
+  indexes {
+    email [unique]
+    (role, is_active) [name: "idx_user_role_active"]
+  }
+}
+
+Table DEPARTMENT {
+  id integer [primary key, increment]
+  name varchar
+  code varchar [unique]
+  is_active boolean [default: true]
+  approval_layers integer
+  created_at timestamp [default: `now()`]
+  updated_at timestamp
+
+  indexes {
+    code [unique]
+    name [unique]
+  }
+}
+
+Table APPROVER {
+  id integer [primary key, increment, not null]
+  user_id integer [not null, ref: > USER.id]
+  department_id integer [not null, ref: > DEPARTMENT.id]
+  approver_type ApproverType [not null]
+  approval_level integer [not null]
+  created_at timestamp [default: `now()`, not null]
+  updated_at timestamp
+
+  indexes {
+    (user_id, department_id, approval_level) [unique, name: "uk_approver_user_dept_level"]
+  }
+}
+
+Table REQUEST {
+  id integer [primary key, increment, not null]
+  user_id integer [not null, ref: > USER.id]
+  department_id integer [not null, ref: > DEPARTMENT.id]
+  request_code varchar(50) [unique, not null]
+  description text [not null]
+  status_note text
+  total_amount float
+  current_approval_level integer [not null, default: 1]
+  status RequestStatus [not null, default: 'DRAFT']
+  urgency_level UrgencyLevel [not null, default: 'MEDIUM']
+  request_date timestamp [not null]
+  created_at timestamp [default: `now()`, not null]
+  updated_at timestamp
+
+  indexes {
+    request_code [unique]
+    (user_id, created_at) [name: "idx_request_user_date"]
+    (department_id, status) [name: "idx_request_dept_status"]
+  }
+}
+
+Table REQUEST_ITEM {
+  id integer [primary key, increment, not null]
+  request_id integer [not null, ref: > REQUEST.id]
+  item_name varchar(200) [not null]
+  quantity integer [not null]
+  unit_price decimal(15,2) [not null]
+  total_price decimal(15,2) [not null]
+  specifications text
+  category ItemCategory [not null]
+  requested_delivery_date date
+  created_at timestamp [default: `now()`, not null]
+  updated_at timestamp
+
+  indexes {
+    (request_id, item_name) [name: "idx_request_item_name"]
+  }
+}
+
+Table APPROVAL_LOG {
+  id integer [primary key, increment, not null]
+  request_id integer [not null, ref: > REQUEST.id]
+  approver_id integer [not null, ref: > APPROVER.id]
+  approval_status ApprovalStatus [not null]
+  notes text
+  created_at timestamp [default: `now()`, not null]
+  updated_at timestamp
+
+  indexes {
+    (request_id, approver_id) [name: "idx_approval_request_approver"]
+  }
+}
+
+Table NOTIFICATION {
+  id integer [primary key, increment, not null]
+  request_id integer [ref: > REQUEST.id]
+  user_id integer [not null, ref: > USER.id]
+  message text [not null]
+  notification_type NotificationType [not null]
+  is_read boolean [default: false, not null]
+  is_sent boolean [default: false, not null]
+  sent_at timestamp
+  read_at timestamp
+  created_at timestamp [default: `now()`, not null]
+  updated_at timestamp
+
+  indexes {
+    (user_id, is_read) [name: "idx_notification_user_read"]
+    (request_id, notification_type) [name: "idx_notification_request_type"]
+  }
+}

@@ -1,0 +1,229 @@
+1. Definisi Enum
+UserRole
+Mendefinisikan peran pengguna dalam sistem:
+ADMIN: Administrator sistem dengan akses penuh ke semua fitur
+STAFF: Karyawan biasa yang dapat membuat pengajuan barang
+MANAGER: Manajer/supervisor yang menyetujui pengajuan di level departemen
+DIRECTOR: Direktur/BOD yang menyetujui pengajuan di level lebih tinggi
+PURCHASING: Staff departemen purchasing yang mengelola proses pengadaan
+
+ApproverType
+Mengategorikan jenis pemberi persetujuan:
+MANAGER: Pemberi persetujuan level manajer/supervisor
+DIRECTOR: Pemberi persetujuan level direktur/BOD
+PURCHASING: Pemberi persetujuan dari departemen purchasing
+
+RequestStatus
+Status pengajuan dalam alur proses approval:
+DRAFT: Pengajuan masih dalam bentuk draft, belum disubmit
+PENDING_MANAGER_APPROVAL: Menunggu persetujuan dari manajer
+MANAGER_APPROVED: Telah disetujui oleh manajer
+PENDING_DIRECTOR_APPROVAL: Menunggu persetujuan dari direktur
+DIRECTOR_APPROVED: Telah disetujui oleh direktur
+PENDING_PURCHASING_APPROVAL: Menunggu persetujuan dari purchasing
+PURCHASING_APPROVED: Telah disetujui oleh purchasing
+FULLY_APPROVED: Telah disetujui oleh semua pihak yang diperlukan
+REJECTED: Ditolak oleh salah satu pemberi persetujuan
+IN_PROCESS: Pengajuan dalam proses pengadaan oleh purchasing
+COMPLETED: Proses pengadaan selesai dan barang telah tersedia
+CANCELLED: Pengajuan dibatalkan
+ON_HOLD: Pengajuan ditunda sementara
+
+UrgencyLevel
+Tingkat urgensi atau prioritas pengajuan:
+LOW: Prioritas rendah, tidak mendesak
+MEDIUM: Prioritas menengah, standar
+HIGH: Prioritas tinggi, perlu perhatian lebih
+CRITICAL: Prioritas kritis/darurat, perlu ditangani segera
+
+ApprovalStatus
+Status spesifik tindakan persetujuan:
+APPROVED: Pengajuan disetujui oleh pemberi persetujuan
+REJECTED: Pengajuan ditolak oleh pemberi persetujuan
+PENDING: Pengajuan masih menunggu tindakan
+
+ItemCategory
+Kategori barang yang diajukan:
+FURNITURE: Perabotan (kursi, meja, lemari, dll)
+ELECTRONICS: Barang elektronik (laptop, printer, proyektor, dll)
+OFFICE_SUPPLIES: Alat tulis kantor (kertas, pulpen, dll)
+COMPUTER_ACCESSORIES: Aksesoris komputer (mouse, keyboard, dll)
+MAINTENANCE: Peralatan pemeliharaan
+OTHERS: Kategori lain yang tidak termasuk di atas
+
+NotificationType
+Jenis notifikasi dalam sistem:
+REQUEST_CREATED: Notifikasi tentang pengajuan baru yang dibuat
+PENDING_APPROVAL: Notifikasi pengajuan menunggu persetujuan
+REQUEST_APPROVED: Notifikasi pengajuan telah disetujui
+REQUEST_REJECTED: Notifikasi pengajuan telah ditolak
+FULLY_APPROVED: Notifikasi pengajuan telah disetujui sepenuhnya
+IN_PROCESS: Notifikasi pengajuan sedang dalam proses pengadaan
+COMPLETED: Notifikasi pengajuan telah selesai dan barang tersedia
+CANCELLED: Notifikasi pengajuan telah dibatalkan
+
+2. Tabel-tabel dalam Sistem
+USER
+Menyimpan informasi semua pengguna sistem.
+Atribut:
+id: Pengidentifikasi unik untuk setiap pengguna (PK)
+role: Peran pengguna dalam sistem (enum UserRole)
+name: Nama lengkap pengguna
+email: Alamat email pengguna (unik)
+phone_number: Nomor telepon untuk notifikasi WhatsApp
+is_active: Status aktif pengguna dalam sistem
+created_at: Waktu pembuatan record
+updated_at: Waktu pembaruan terakhir
+
+DEPARTMENT
+Menyimpan informasi departemen dalam organisasi.
+Atribut:
+id: Pengidentifikasi unik untuk setiap departemen (PK)
+name: Nama departemen
+code: Kode singkat departemen (unik)
+is_active: Status aktif departemen
+approval_layers: Jumlah tingkat persetujuan yang diperlukan
+created_at: Waktu pembuatan record
+updated_at: Waktu pembaruan terakhir
+
+APPROVER
+Menghubungkan pengguna dengan peran persetujuan dalam departemen tertentu.
+Atribut:
+id: Pengidentifikasi unik untuk setiap pemberi persetujuan (PK)
+user_id: Referensi ke pengguna (FK ke USER.id)
+department_id: Referensi ke departemen (FK ke DEPARTMENT.id)
+approver_type: Jenis pemberi persetujuan (enum ApproverType)
+approval_level: Tingkat dalam hierarki persetujuan
+created_at: Waktu pembuatan record
+updated_at: Waktu pembaruan terakhir
+
+REQUEST
+Menyimpan informasi utama pengajuan barang.
+Atribut:
+id: Pengidentifikasi unik untuk setiap pengajuan (PK)
+user_id: Referensi ke pengguna yang membuat pengajuan (FK ke USER.id)
+department_id: Referensi ke departemen (FK ke DEPARTMENT.id)
+request_code: Kode referensi unik pengajuan
+description: Deskripsi pengajuan
+status_note: catatan atau alasan perubahan status
+total_amount: total nilai pengajuan yang dihitung dari semua item
+current_approval_level: Level approval saat ini
+status: Status pengajuan (enum RequestStatus)
+urgency_level: Tingkat urgensi (enum UrgencyLevel)
+request_date: Tanggal pengajuan
+created_at: Waktu pembuatan record
+updated_at: Waktu pembaruan terakhir
+
+REQUEST_ITEM
+Menyimpan detail item-item dalam setiap pengajuan.
+Atribut:
+id: Pengidentifikasi unik untuk setiap item (PK)
+request_id: Referensi ke pengajuan (FK ke REQUEST.id)
+item_name: Nama barang yang diajukan
+quantity: Jumlah barang
+unit_price: Harga per unit
+total_price: Total harga (quantity × unit_price)
+specifications: Spesifikasi atau deskripsi tambahan
+category: Kategori barang (enum ItemCategory)
+requested_delivery_date: Tanggal pengiriman yang diinginkan
+created_at: Waktu pembuatan record
+updated_at: Waktu pembaruan terakhir
+
+APPROVAL_LOG
+Mencatat riwayat tindakan persetujuan untuk audit trail.
+Atribut:
+id: Pengidentifikasi unik setiap log persetujuan (PK)
+request_id: Referensi ke pengajuan (FK ke REQUEST.id)
+approver_id: Referensi ke pemberi persetujuan (FK ke APPROVER.id)
+approval_status: Hasil tindakan persetujuan (enum ApprovalStatus)
+notes: Catatan dari pemberi persetujuan
+created_at: Waktu pembuatan record (waktu approval)
+updated_at: Waktu pembaruan terakhir
+
+NOTIFICATION
+Mengelola notifikasi yang dikirim kepada pengguna.
+Atribut:
+id: Pengidentifikasi unik setiap notifikasi (PK)
+request_id: Referensi ke pengajuan terkait (FK ke REQUEST.id)
+user_id: Referensi ke penerima notifikasi (FK ke USER.id)
+message: Isi pesan notifikasi
+notification_type: Jenis notifikasi (enum NotificationType)
+is_read: Penanda apakah notifikasi sudah dibaca
+is_sent: Penanda apakah notifikasi berhasil dikirim
+sent_at: Waktu pengiriman notifikasi
+read_at: Waktu notifikasi dibaca
+created_at: Waktu pembuatan record
+updated_at: Waktu pembaruan terakhir
+
+3. Relasi Antar Tabel
+USER — APPROVER (One-to-Many):
+Satu pengguna dapat memiliki banyak peran sebagai approver
+Foreign key: user_id pada tabel APPROVER
+
+USER — REQUEST (One-to-Many):
+Satu pengguna dapat membuat banyak pengajuan
+Foreign key: user_id pada tabel REQUEST
+
+USER — NOTIFICATION (One-to-Many):
+Satu pengguna dapat menerima banyak notifikasi
+Foreign key: user_id pada tabel NOTIFICATION
+
+DEPARTMENT — APPROVER (One-to-Many):
+Satu departemen dapat memiliki banyak approver
+Foreign key: department_id pada tabel APPROVER
+
+DEPARTMENT — REQUEST (One-to-Many):
+Satu departemen dapat memiliki banyak pengajuan
+Foreign key: department_id pada tabel REQUEST
+
+REQUEST — REQUEST_ITEM (One-to-Many):
+Satu pengajuan dapat berisi banyak item
+Foreign key: request_id pada tabel REQUEST_ITEM
+
+REQUEST — APPROVAL_LOG (One-to-Many):
+Satu pengajuan dapat memiliki banyak log persetujuan
+Foreign key: request_id pada tabel APPROVAL_LOG
+
+REQUEST — NOTIFICATION (One-to-Many):
+Satu pengajuan dapat menghasilkan banyak notifikasi
+Foreign key: request_id pada tabel NOTIFICATION
+
+APPROVER — APPROVAL_LOG (One-to-Many):
+Satu approver dapat membuat banyak log persetujuan
+Foreign key: approver_id pada tabel APPROVAL_LOG
+
+4. Alur Proses Approval dalam Sistem
+Berdasarkan struktur ERD, alur proses approval dalam sistem WAPPROVE adalah:
+Pembuatan Pengajuan:
+Pengguna dengan peran STAFF membuat pengajuan (REQUEST)
+Menambahkan item-item (REQUEST_ITEM) ke dalam pengajuan
+Status awal: DRAFT, kemudian PENDING_MANAGER_APPROVAL setelah disubmit
+Sistem mengirim notifikasi (NOTIFICATION) ke manager departemen
+
+Approval Manager:
+Manager menerima notifikasi dan mereview pengajuan
+Manager menyetujui/menolak melalui WhatsApp atau sistem
+Sistem mencatat keputusan di APPROVAL_LOG
+Status berubah menjadi MANAGER_APPROVED atau REJECTED
+Sistem mengirim notifikasi hasil ke staff
+
+Approval Director:
+Jika disetujui manager, status berubah menjadi PENDING_DIRECTOR_APPROVAL
+Director menerima notifikasi dan mereview pengajuan
+Director menyetujui/menolak pengajuan
+Sistem mencatat keputusan di APPROVAL_LOG
+Status berubah menjadi DIRECTOR_APPROVED atau REJECTED
+
+Approval Purchasing:
+Jika disetujui director, status berubah menjadi PENDING_PURCHASING_APPROVAL
+Staff purchasing menerima notifikasi
+Purchasing menyetujui/menolak pengajuan
+Sistem mencatat keputusan di APPROVAL_LOG
+Status berubah menjadi PURCHASING_APPROVED, lalu FULLY_APPROVED
+
+Proses Pengadaan:
+Purchasing memproses pengajuan yang fully approved
+Status berubah menjadi IN_PROCESS
+Sistem mengirim notifikasi update ke staff dan manager
+Setelah barang tersedia, status berubah menjadi COMPLETED
+Sistem mengirim notifikasi penyelesaian
