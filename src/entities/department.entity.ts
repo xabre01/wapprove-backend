@@ -8,6 +8,7 @@ import {
 } from 'typeorm';
 import { Approver } from './approver.entity';
 import { Request } from './request.entity';
+import { User } from './user.entity';
 
 @Entity('departments')
 export class Department {
@@ -33,6 +34,9 @@ export class Department {
   updated_at: Date;
 
   // Relations
+  @OneToMany(() => User, (user) => user.department)
+  users: User[];
+
   @OneToMany(() => Approver, (approver) => approver.department)
   approvers: Approver[];
 

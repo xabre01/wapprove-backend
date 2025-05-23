@@ -6,12 +6,15 @@ import {
   UpdateDateColumn,
   OneToMany,
   OneToOne,
+  ManyToOne,
+  JoinColumn,
 } from 'typeorm';
 import { UserRole } from '../common/enums';
 import { Approver } from './approver.entity';
 import { Request } from './request.entity';
 import { Notification } from './notification.entity';
 import { Account } from './account.entity';
+import { Department } from './department.entity';
 
 @Entity('users')
 export class User {
@@ -34,6 +37,9 @@ export class User {
   @Column({ length: 20, nullable: true })
   phone_number: string;
 
+  @Column({ name: 'department_id', nullable: true })
+  department_id: number;
+
   @Column({ default: true, nullable: false })
   is_active: boolean;
 
@@ -46,6 +52,12 @@ export class User {
   // Relations
   @OneToOne(() => Account, (account) => account.user)
   account: Account;
+
+  @ManyToOne(() => Department, (department) => department.users, {
+    nullable: true,
+  })
+  @JoinColumn({ name: 'department_id' })
+  department: Department;
 
   @OneToMany(() => Approver, (approver) => approver.user)
   approvers: Approver[];

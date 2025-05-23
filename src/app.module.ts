@@ -4,6 +4,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './modules/auth/auth.module';
+import { DepartmentModule } from './modules/department/department.module';
+import { UserModule } from './modules/user/user.module';
 import { entities } from './entities';
 import databaseConfig from './config/database.config';
 import jwtConfig from './config/jwt.config';
@@ -23,6 +25,8 @@ import jwtConfig from './config/jwt.config';
       }),
     }),
     AuthModule,
+    DepartmentModule,
+    UserModule,
   ],
   controllers: [AppController],
   providers: [AppService],
