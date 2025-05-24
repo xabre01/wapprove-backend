@@ -7,16 +7,15 @@ import {
   Param,
   Delete,
   Query,
-  UseGuards,
   ParseIntPipe,
 } from '@nestjs/common';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UserService } from './user.service';
 import { CreateUserDto, UpdateUserDto, QueryUserDto } from './dto';
 import { ApiResponse, ApiResponseWithMeta } from '../../common/interfaces';
+import { AdminOnly } from '../../common/decorators';
 
 @Controller('users')
-@UseGuards(JwtAuthGuard)
+@AdminOnly()
 export class UserController {
   constructor(private readonly userService: UserService) {}
 

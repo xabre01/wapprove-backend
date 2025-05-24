@@ -7,7 +7,6 @@ import {
   Param,
   Delete,
   Query,
-  UseGuards,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
@@ -17,10 +16,10 @@ import {
   UpdateDepartmentDto,
   QueryDepartmentDto,
 } from './dto';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminOnly } from '../../common/decorators';
 
 @Controller('departments')
-@UseGuards(JwtAuthGuard)
+@AdminOnly()
 export class DepartmentController {
   constructor(private readonly departmentService: DepartmentService) {}
 
