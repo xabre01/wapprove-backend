@@ -9,6 +9,7 @@ import {
   Query,
   HttpCode,
   HttpStatus,
+  HttpException,
 } from '@nestjs/common';
 import { DepartmentService } from './department.service';
 import {
@@ -111,11 +112,14 @@ export class DepartmentController {
   }
 
   @Delete(':id')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  async remove(@Param('id') id: string) {
-    await this.departmentService.remove(parseInt(id));
-    return {
-      message: 'Department berhasil dihapus',
-    };
+  async remove() {
+    throw new HttpException(
+      {
+        message: 'Fitur hapus department belum tersedia',
+        error: 'Not Implemented',
+        statusCode: 501,
+      },
+      HttpStatus.NOT_IMPLEMENTED,
+    );
   }
 }

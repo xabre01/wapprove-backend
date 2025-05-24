@@ -8,6 +8,8 @@ import {
   Delete,
   Query,
   ParseIntPipe,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { UserService } from './user.service';
 import { CreateUserDto, UpdateUserDto, QueryUserDto } from './dto';
@@ -141,14 +143,14 @@ export class UserController {
   }
 
   @Delete(':id')
-  async remove(
-    @Param('id', ParseIntPipe) id: number,
-  ): Promise<ApiResponse<void>> {
-    await this.userService.remove(id);
-
-    return {
-      message: 'User berhasil dihapus',
-      data: null,
-    };
+  async remove(): Promise<ApiResponse<void>> {
+    throw new HttpException(
+      {
+        message: 'Fitur hapus user belum tersedia',
+        error: 'Not Implemented',
+        statusCode: 501,
+      },
+      HttpStatus.NOT_IMPLEMENTED,
+    );
   }
 }

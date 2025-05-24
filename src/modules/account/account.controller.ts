@@ -8,6 +8,8 @@ import {
   Delete,
   Query,
   ParseIntPipe,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { AccountService } from './account.service';
 import {
@@ -126,14 +128,14 @@ export class AccountController {
   }
 
   @Delete(':id')
-  async remove(
-    @Param('id', ParseIntPipe) id: number,
-  ): Promise<ApiResponse<void>> {
-    await this.accountService.remove(id);
-
-    return {
-      message: 'Account berhasil dihapus',
-      data: null,
-    };
+  async remove(): Promise<ApiResponse<void>> {
+    throw new HttpException(
+      {
+        message: 'Fitur hapus account belum tersedia',
+        error: 'Not Implemented',
+        statusCode: 501,
+      },
+      HttpStatus.NOT_IMPLEMENTED,
+    );
   }
 }

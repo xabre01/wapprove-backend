@@ -8,6 +8,8 @@ import {
   Delete,
   Query,
   ParseIntPipe,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { ApproverService } from './approver.service';
 import {
@@ -115,15 +117,15 @@ export class ApproverController {
   }
 
   @Delete(':id')
-  async remove(
-    @Param('id', ParseIntPipe) id: number,
-  ): Promise<ApiResponse<void>> {
-    await this.approverService.remove(id);
-
-    return {
-      message: 'Approver berhasil dihapus',
-      data: null,
-    };
+  async remove(): Promise<ApiResponse<void>> {
+    throw new HttpException(
+      {
+        message: 'Fitur hapus approver belum tersedia',
+        error: 'Not Implemented',
+        statusCode: 501,
+      },
+      HttpStatus.NOT_IMPLEMENTED,
+    );
   }
 }
 
