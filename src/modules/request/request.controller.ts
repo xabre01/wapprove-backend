@@ -20,8 +20,8 @@ import {
   RejectRequestDto,
   HoldRequestDto,
 } from './dto';
-import { ApiResponse, ApiResponseWithMeta } from '../../common/interfaces';
-import { RequireAuth } from '../../common/decorators';
+import { ApiResponse, ApiResponseWithMeta, CurrentUserData } from '../../common/interfaces';
+import { RequireAuth, CurrentUser } from '../../common/decorators';
 import { Request } from '../../entities';
 
 @Controller('requests')
@@ -124,9 +124,10 @@ export class RequestController {
   @Get()
   async findAll(
     @Query() queryDto: QueryRequestDto,
+    @CurrentUser() currentUser: CurrentUserData,
   ): Promise<ApiResponseWithMeta<any[]>> {
     const { requests, meta } =
-      await this.requestService.findAllWithPagination(queryDto);
+      await this.requestService.findAllWithPagination(queryDto, currentUser);
 
     const mappedRequests = requests.map((request) => this.mapRequestResponse(request));
 
@@ -140,8 +141,9 @@ export class RequestController {
   @Get(':id')
   async findOne(
     @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() currentUser: CurrentUserData,
   ): Promise<ApiResponse<any>> {
-    const request = await this.requestService.findOne(id);
+    const request = await this.requestService.findOne(id, currentUser);
 
     return {
       message: 'Data request berhasil diambil',

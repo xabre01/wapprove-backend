@@ -6,8 +6,8 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Request, RequestItem, User, Department } from '../../entities';
-import { RequestStatus } from '../../common/enums';
+import { Request, RequestItem, User, Department, Approver } from '../../entities';
+import { RequestStatus, UserRole } from '../../common/enums';
 import {
   CreateRequestDto,
   QueryRequestDto,
@@ -16,7 +16,7 @@ import {
   RejectRequestDto,
   HoldRequestDto,
 } from './dto';
-import { PaginationMeta } from '../../common/interfaces';
+import { PaginationMeta, CurrentUserData } from '../../common/interfaces';
 
 @Injectable()
 export class RequestService {
@@ -29,6 +29,8 @@ export class RequestService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Department)
     private readonly departmentRepository: Repository<Department>,
+    @InjectRepository(Approver)
+    private readonly approverRepository: Repository<Approver>,
   ) {}
 
   async create(createRequestDto: CreateRequestDto): Promise<Request> {
@@ -89,10 +91,20 @@ export class RequestService {
     await this.requestItemRepository.save(requestItems);
 
     // Return with relations
-    return await this.findOne(savedRequest.id);
+    return await this.findOneInternal(savedRequest.id);
   }
 
-  async findAllWithPagination(queryDto: QueryRequestDto) {
+  async findAllWithPagination(queryDto: QueryRequestDto, currentUserData: CurrentUserData) {
+    // Get full user entity with department relation
+    const currentUser = await this.userRepository.findOne({
+      where: { id: currentUserData.id },
+      relations: ['department'],
+    });
+
+    if (!currentUser) {
+      throw new NotFoundException('User tidak ditemukan');
+    }
+
     const {
       query,
       department_id,
@@ -115,9 +127,12 @@ export class RequestService {
       .leftJoinAndSelect('request.request_items', 'request_items')
       .leftJoinAndSelect('request.approval_logs', 'approval_logs');
 
+    // Apply role-based filtering
+    await this.applyRoleBasedFilter(queryBuilder, currentUser);
+
     // Apply search filter
     if (query) {
-      queryBuilder.where(
+      queryBuilder.andWhere(
         '(request.request_code ILIKE :query OR request.description ILIKE :query OR user.name ILIKE :query)',
         { query: `%${query}%` },
       );
@@ -187,7 +202,74 @@ export class RequestService {
     return { requests, meta };
   }
 
-  async findOne(id: number): Promise<Request> {
+  private async applyRoleBasedFilter(queryBuilder: any, currentUser: User) {
+    switch (currentUser.role) {
+      case UserRole.STAFF:
+        // Staff hanya bisa melihat request yang dibuat dirinya sendiri
+        queryBuilder.andWhere('request.user_id = :currentUserId', {
+          currentUserId: currentUser.id,
+        });
+        break;
+
+      case UserRole.MANAGER:
+        // Manager hanya bisa melihat request dari departemen nya sendiri
+        if (!currentUser.department_id) {
+          // Jika manager tidak memiliki department, tidak ada request yang bisa dilihat
+          queryBuilder.andWhere('1 = 0'); // Always false condition
+        } else {
+          queryBuilder.andWhere('request.department_id = :managerDepartmentId', {
+            managerDepartmentId: currentUser.department_id,
+          });
+        }
+        break;
+
+      case UserRole.DIRECTOR:
+        // Director hanya bisa melihat request dari departemen yang dia terdaftar sebagai approver
+        const directorDepartments = await this.approverRepository
+          .createQueryBuilder('approver')
+          .select('approver.department_id')
+          .where('approver.user_id = :directorId', { directorId: currentUser.id })
+          .getRawMany();
+
+        const departmentIds = directorDepartments.map(dept => dept.department_id);
+        
+        if (departmentIds.length === 0) {
+          // Jika director tidak terdaftar sebagai approver di department manapun
+          queryBuilder.andWhere('1 = 0'); // Always false condition
+        } else {
+          queryBuilder.andWhere('request.department_id IN (:...directorDepartmentIds)', {
+            directorDepartmentIds: departmentIds,
+          });
+        }
+        break;
+
+      case UserRole.ADMIN:
+      case UserRole.PURCHASING:
+        // Admin dan Purchasing dapat melihat semua request - tidak ada filter tambahan
+        break;
+
+      default:
+        // Untuk role yang tidak dikenal, tidak ada akses
+        queryBuilder.andWhere('1 = 0'); // Always false condition
+        break;
+    }
+  }
+
+  async findOne(id: number, currentUserData?: CurrentUserData): Promise<Request> {
+    const request = await this.findOneInternal(id);
+
+    // If currentUserData provided, check role-based access
+    if (currentUserData) {
+      const hasAccess = await this.checkRequestAccess(request, currentUserData);
+      if (!hasAccess) {
+        throw new NotFoundException('Request tidak ditemukan');
+      }
+    }
+
+    return request;
+  }
+
+  private async findOneInternal(id: number): Promise<Request> {
     const request = await this.requestRepository.findOne({
       where: { id },
       relations: [
@@ -208,8 +290,53 @@ export class RequestService {
     return request;
   }
 
+  private async checkRequestAccess(request: Request, currentUserData: CurrentUserData): Promise<boolean> {
+    // Get full user entity
+    const currentUser = await this.userRepository.findOne({
+      where: { id: currentUserData.id },
+      relations: ['department'],
+    });
+
+    if (!currentUser) {
+      return false;
+    }
+
+    switch (currentUser.role) {
+      case UserRole.STAFF:
+        // Staff hanya bisa melihat request yang dibuat dirinya sendiri
+        return request.user_id === currentUser.id;
+
+      case UserRole.MANAGER:
+        // Manager hanya bisa melihat request dari departemen nya sendiri
+        if (!currentUser.department_id) {
+          return false;
+        }
+        return request.department_id === currentUser.department_id;
+
+      case UserRole.DIRECTOR:
+        // Director hanya bisa melihat request dari departemen yang dia terdaftar sebagai approver
+        const directorDepartments = await this.approverRepository
+          .createQueryBuilder('approver')
+          .select('approver.department_id')
+          .where('approver.user_id = :directorId', { directorId: currentUser.id })
+          .getRawMany();
+
+        const departmentIds = directorDepartments.map(dept => dept.department_id);
+        return departmentIds.includes(request.department_id);
+
+      case UserRole.ADMIN:
+      case UserRole.PURCHASING:
+        // Admin dan Purchasing dapat melihat semua request
+        return true;
+
+      default:
+        // Untuk role yang tidak dikenal, tidak ada akses
+        return false;
+    }
+  }
+
   async update(id: number, updateRequestDto: UpdateRequestDto): Promise<Request> {
-    const request = await this.findOne(id);
+    const request = await this.findOneInternal(id);
 
     // Check if request can be updated (only DRAFT status can be updated)
     if (request.status !== RequestStatus.DRAFT) {
@@ -261,11 +388,11 @@ export class RequestService {
 
     await this.requestRepository.save(request);
 
-    return await this.findOne(id);
+    return await this.findOneInternal(id);
   }
 
   async remove(id: number): Promise<void> {
-    const request = await this.findOne(id);
+    const request = await this.findOneInternal(id);
     
     // Check if request can be deleted (only DRAFT status can be deleted)
     if (request.status !== RequestStatus.DRAFT) {
@@ -280,8 +407,6 @@ export class RequestService {
   }
 
   async approve(id: number, approveRequestDto: ApproveRequestDto): Promise<Request> {
-    const request = await this.findOne(id);
-    
     // TODO: Implement approval logic
     // This will be implemented in next iteration with proper approval workflow
     
@@ -289,8 +414,6 @@ export class RequestService {
   }
 
   async reject(id: number, rejectRequestDto: RejectRequestDto): Promise<Request> {
-    const request = await this.findOne(id);
-    
     // TODO: Implement rejection logic
     // This will be implemented in next iteration with proper approval workflow
     
@@ -298,8 +421,6 @@ export class RequestService {
   }
 
   async cancel(id: number): Promise<Request> {
-    const request = await this.findOne(id);
-    
     // TODO: Implement cancel logic
     // This will be implemented in next iteration
     
@@ -307,8 +428,6 @@ export class RequestService {
   }
 
   async complete(id: number): Promise<Request> {
-    const request = await this.findOne(id);
-    
     // TODO: Implement complete logic
     // This will be implemented in next iteration
     
@@ -316,8 +435,6 @@ export class RequestService {
   }
 
   async hold(id: number, holdRequestDto: HoldRequestDto): Promise<Request> {
-    const request = await this.findOne(id);
-    
     // TODO: Implement hold logic
     // This will be implemented in next iteration
     
