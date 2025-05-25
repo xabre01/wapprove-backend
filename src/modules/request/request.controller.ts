@@ -101,6 +101,14 @@ export class RequestController {
                     role: log.approver.user.role,
                   }
                 : null,
+              department: log.approver.department
+                ? {
+                    id: log.approver.department.id.toString(),
+                    name: log.approver.department.name,
+                    code: log.approver.department.code,
+                    is_active: log.approver.department.is_active,
+                  }
+                : null,
             }
           : null,
       })) || [],
@@ -180,8 +188,9 @@ export class RequestController {
   async approve(
     @Param('id', ParseIntPipe) id: number,
     @Body() approveRequestDto: ApproveRequestDto,
+    @CurrentUser() currentUser: CurrentUserData,
   ): Promise<ApiResponse<any>> {
-    const request = await this.requestService.approve(id, approveRequestDto);
+    const request = await this.requestService.approve(id, approveRequestDto, currentUser);
 
     return {
       message: 'Request berhasil diapprove',
@@ -193,8 +202,9 @@ export class RequestController {
   async reject(
     @Param('id', ParseIntPipe) id: number,
     @Body() rejectRequestDto: RejectRequestDto,
+    @CurrentUser() currentUser: CurrentUserData,
   ): Promise<ApiResponse<any>> {
-    const request = await this.requestService.reject(id, rejectRequestDto);
+    const request = await this.requestService.reject(id, rejectRequestDto, currentUser);
 
     return {
       message: 'Request berhasil direject',
@@ -205,8 +215,9 @@ export class RequestController {
   @Post(':id/cancel')
   async cancel(
     @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() currentUser: CurrentUserData,
   ): Promise<ApiResponse<any>> {
-    const request = await this.requestService.cancel(id);
+    const request = await this.requestService.cancel(id, currentUser);
 
     return {
       message: 'Request berhasil dicancel',
@@ -217,8 +228,9 @@ export class RequestController {
   @Post(':id/complete')
   async complete(
     @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() currentUser: CurrentUserData,
   ): Promise<ApiResponse<any>> {
-    const request = await this.requestService.complete(id);
+    const request = await this.requestService.complete(id, currentUser);
 
     return {
       message: 'Request berhasil dicomplete',
@@ -230,11 +242,25 @@ export class RequestController {
   async hold(
     @Param('id', ParseIntPipe) id: number,
     @Body() holdRequestDto: HoldRequestDto,
+    @CurrentUser() currentUser: CurrentUserData,
   ): Promise<ApiResponse<any>> {
-    const request = await this.requestService.hold(id, holdRequestDto);
+    const request = await this.requestService.hold(id, holdRequestDto, currentUser);
 
     return {
       message: 'Request berhasil dihold',
+      data: this.mapRequestResponse(request),
+    };
+  }
+
+  @Post(':id/process')
+  async processRequest(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() currentUser: CurrentUserData,
+  ): Promise<ApiResponse<any>> {
+    const request = await this.requestService.processRequest(id, currentUser);
+
+    return {
+      message: 'Request berhasil diproses',
       data: this.mapRequestResponse(request),
     };
   }

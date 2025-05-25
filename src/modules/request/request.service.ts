@@ -1,13 +1,13 @@
 import {
   Injectable,
   NotFoundException,
-  ConflictException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Request, RequestItem, User, Department, Approver } from '../../entities';
-import { RequestStatus, UserRole } from '../../common/enums';
+import { Request, RequestItem, User, Department, Approver, ApprovalLog } from '../../entities';
+import { RequestStatus, UserRole, ApprovalStatus, ApproverType } from '../../common/enums';
 import {
   CreateRequestDto,
   QueryRequestDto,
@@ -31,6 +31,8 @@ export class RequestService {
     private readonly departmentRepository: Repository<Department>,
     @InjectRepository(Approver)
     private readonly approverRepository: Repository<Approver>,
+    @InjectRepository(ApprovalLog)
+    private readonly approvalLogRepository: Repository<ApprovalLog>,
   ) {}
 
   async create(createRequestDto: CreateRequestDto): Promise<Request> {
@@ -61,6 +63,9 @@ export class RequestService {
       0,
     );
 
+    // Determine initial status based on approval layers
+    const initialStatus = await this.determineInitialStatus(createRequestDto.department_id);
+
     // Create request
     const request = this.requestRepository.create({
       user_id: createRequestDto.user_id,
@@ -69,7 +74,7 @@ export class RequestService {
       description: createRequestDto.description,
       status_note: createRequestDto.status_note,
       total_amount: totalAmount,
-      status: createRequestDto.status || RequestStatus.DRAFT,
+      status: createRequestDto.status || initialStatus,
       urgency_level: createRequestDto.urgency_level,
       request_date: new Date(createRequestDto.request_date),
       current_approval_level: 1,
@@ -92,6 +97,35 @@ export class RequestService {
 
     // Return with relations
     return await this.findOneInternal(savedRequest.id);
+  }
+
+  private async determineInitialStatus(departmentId: number): Promise<RequestStatus> {
+    // Get approval layers for this department
+    const approvalLayers = await this.getApprovalLayers(departmentId);
+    
+    if (approvalLayers.length === 0) {
+      // No approval layers, go directly to purchasing
+      return RequestStatus.PENDING_PURCHASING_APPROVAL;
+    }
+
+    // Start with first approval layer
+    const firstLayer = approvalLayers[0];
+    if (firstLayer.approver_type === ApproverType.MANAGER) {
+      return RequestStatus.PENDING_MANAGER_APPROVAL;
+    } else if (firstLayer.approver_type === ApproverType.DIRECTOR) {
+      return RequestStatus.PENDING_DIRECTOR_APPROVAL;
+    }
+
+    // Default to purchasing if no specific approver type
+    return RequestStatus.PENDING_PURCHASING_APPROVAL;
+  }
+
+  private async getApprovalLayers(departmentId: number) {
+    return await this.approverRepository
+      .createQueryBuilder('approver')
+      .where('approver.department_id = :departmentId', { departmentId })
+      .orderBy('approver.approval_level', 'ASC')
+      .getMany();
   }
 
   async findAllWithPagination(queryDto: QueryRequestDto, currentUserData: CurrentUserData) {
@@ -125,7 +159,10 @@ export class RequestService {
       .leftJoinAndSelect('request.user', 'user')
       .leftJoinAndSelect('request.department', 'department')
       .leftJoinAndSelect('request.request_items', 'request_items')
-      .leftJoinAndSelect('request.approval_logs', 'approval_logs');
+      .leftJoinAndSelect('request.approval_logs', 'approval_logs')
+      .leftJoinAndSelect('approval_logs.approver', 'approver')
+      .leftJoinAndSelect('approver.user', 'approver_user')
+      .leftJoinAndSelect('approver.department', 'approver_department')
 
     // Apply role-based filtering
     await this.applyRoleBasedFilter(queryBuilder, currentUser);
@@ -231,8 +268,8 @@ export class RequestService {
           .where('approver.user_id = :directorId', { directorId: currentUser.id })
           .getRawMany();
 
-        const departmentIds = directorDepartments.map(dept => dept.department_id);
-        
+        const departmentIds = directorDepartments.map(dept => dept.approver_department_id);
+
         if (departmentIds.length === 0) {
           // Jika director tidak terdaftar sebagai approver di department manapun
           queryBuilder.andWhere('1 = 0'); // Always false condition
@@ -279,7 +316,8 @@ export class RequestService {
         'request_items',
         'approval_logs',
         'approval_logs.approver',
-        'approval_logs.approver.user'
+        'approval_logs.approver.user',
+        'approval_logs.approver.department'
       ],
     });
 
@@ -406,39 +444,428 @@ export class RequestService {
     await this.requestRepository.remove(request);
   }
 
-  async approve(id: number, approveRequestDto: ApproveRequestDto): Promise<Request> {
-    // TODO: Implement approval logic
-    // This will be implemented in next iteration with proper approval workflow
+  async approve(id: number, approveRequestDto: ApproveRequestDto, currentUserData: CurrentUserData): Promise<Request> {
+    const request = await this.findOneInternal(id);
     
-    throw new BadRequestException('Fitur approve belum diimplementasi');
+    // Get current user with department
+    const currentUser = await this.userRepository.findOne({
+      where: { id: currentUserData.id },
+      relations: ['department'],
+    });
+
+    if (!currentUser) {
+      throw new NotFoundException('User tidak ditemukan');
+    }
+
+    // Check if user has permission to approve this request
+    await this.checkApprovalPermission(request, currentUser);
+
+    // Get or create approver record for current user and request department
+    let approver = await this.approverRepository.findOne({
+      where: {
+        user_id: currentUser.id,
+        department_id: request.department_id,
+      },
+    });
+
+    // For admin and purchasing, create virtual approver if not exists
+    if (!approver && (currentUser.role === UserRole.ADMIN || currentUser.role === UserRole.PURCHASING)) {
+      // Create virtual approver for admin/purchasing
+      approver = this.approverRepository.create({
+        user_id: currentUser.id,
+        department_id: request.department_id,
+        approver_type: ApproverType.PURCHASING, // Admin and purchasing use PURCHASING type
+        approval_level: 999, // High level to indicate final approval
+      });
+      
+      approver = await this.approverRepository.save(approver);
+    }
+
+    if (!approver) {
+      throw new ForbiddenException('Anda tidak memiliki akses untuk approve request ini');
+    }
+
+    // Check if user already approved this request
+    const existingApproval = await this.approvalLogRepository.findOne({
+      where: {
+        request_id: id,
+        approver_id: approver.id,
+        approval_status: ApprovalStatus.APPROVED,
+      },
+    });
+
+    if (existingApproval) {
+      throw new BadRequestException('Anda sudah melakukan approval untuk request ini');
+    }
+
+    // For manager and director, check approval level
+    if (currentUser.role === UserRole.MANAGER || currentUser.role === UserRole.DIRECTOR) {
+      // Check if user can approve at current approval level
+      if (request.current_approval_level !== approver.approval_level) {
+        throw new BadRequestException(`Request sedang berada di approval level ${request.current_approval_level}, Anda hanya bisa approve di level ${approver.approval_level}`);
+      }
+    }
+
+    // Create approval log
+    const approvalLog = this.approvalLogRepository.create({
+      request_id: id,
+      approver_id: approver.id,
+      approval_status: ApprovalStatus.APPROVED,
+      notes: approveRequestDto.notes,
+    });
+
+    await this.approvalLogRepository.save(approvalLog);
+
+    // For admin and purchasing, directly set to fully approved
+    if (currentUser.role === UserRole.ADMIN || currentUser.role === UserRole.PURCHASING) {
+      request.status = RequestStatus.FULLY_APPROVED;
+      await this.requestRepository.update(request.id, {
+        status: request.status,
+      });
+    } else {
+      // For manager and director, check if all approvers at current level have approved
+      const allApprovedAtLevel = await this.checkAllApprovedAtLevel(request.department_id, request.current_approval_level, id);
+
+      if (allApprovedAtLevel) {
+        // Move to next status
+        await this.moveToNextApprovalStatus(request);
+      }
+    }
+
+    return await this.findOneInternal(id);
   }
 
-  async reject(id: number, rejectRequestDto: RejectRequestDto): Promise<Request> {
-    // TODO: Implement rejection logic
-    // This will be implemented in next iteration with proper approval workflow
-    
-    throw new BadRequestException('Fitur reject belum diimplementasi');
+  private async checkApprovalPermission(request: Request, currentUser: User) {
+    // Staff cannot approve
+    if (currentUser.role === UserRole.STAFF) {
+      throw new ForbiddenException('Staff tidak dapat melakukan approval');
+    }
+
+    // Check role-based approval permissions
+    switch (currentUser.role) {
+      case UserRole.MANAGER:
+        if (request.status !== RequestStatus.PENDING_MANAGER_APPROVAL) {
+          throw new BadRequestException('Request tidak dalam status PENDING_MANAGER_APPROVAL');
+        }
+        if (currentUser.department_id !== request.department_id) {
+          throw new ForbiddenException('Manager hanya bisa approve request dari departemen sendiri');
+        }
+        break;
+
+      case UserRole.DIRECTOR:
+        if (request.status !== RequestStatus.PENDING_DIRECTOR_APPROVAL) {
+          throw new BadRequestException('Request tidak dalam status PENDING_DIRECTOR_APPROVAL');
+        }
+        // Check if director is registered as approver for this department
+        const directorApprover = await this.approverRepository.findOne({
+          where: {
+            user_id: currentUser.id,
+            department_id: request.department_id,
+          },
+        });
+        if (!directorApprover) {
+          throw new ForbiddenException('Director tidak terdaftar sebagai approver untuk departemen ini');
+        }
+        break;
+
+      case UserRole.ADMIN:
+      case UserRole.PURCHASING:
+        if (request.status !== RequestStatus.PENDING_PURCHASING_APPROVAL) {
+          throw new BadRequestException('Request tidak dalam status PENDING_PURCHASING_APPROVAL');
+        }
+        break;
+
+      default:
+        throw new ForbiddenException('Role tidak memiliki akses approval');
+    }
   }
 
-  async cancel(id: number): Promise<Request> {
-    // TODO: Implement cancel logic
-    // This will be implemented in next iteration
-    
-    throw new BadRequestException('Fitur cancel belum diimplementasi');
+  private async checkAllApprovedAtLevel(departmentId: number, approvalLevel: number, requestId: number): Promise<boolean> {
+    // Get all approvers at this level for this department
+    const approversAtLevel = await this.approverRepository.find({
+      where: {
+        department_id: departmentId,
+        approval_level: approvalLevel,
+      },
+    });
+
+    if (approversAtLevel.length === 0) {
+      return false;
+    }
+
+    // Get all approvals for this request at this level
+    const approverIds = approversAtLevel.map(a => a.id);
+    const approvals = await this.approvalLogRepository
+      .createQueryBuilder('approval_log')
+      .where('approval_log.request_id = :requestId', { requestId })
+      .andWhere('approval_log.approver_id IN (:...approverIds)', { approverIds })
+      .andWhere('approval_log.approval_status = :status', { status: ApprovalStatus.APPROVED })
+      .getMany();
+
+    // Check if all approvers at this level have approved
+    return approvals.length === approversAtLevel.length;
   }
 
-  async complete(id: number): Promise<Request> {
-    // TODO: Implement complete logic
-    // This will be implemented in next iteration
+  private async moveToNextApprovalStatus(request: Request) {
+    const approvalLayers = await this.getApprovalLayers(request.department_id);
     
-    throw new BadRequestException('Fitur complete belum diimplementasi');
+    // Find current layer
+    const currentLayer = approvalLayers.find(layer => layer.approval_level === request.current_approval_level);
+    
+    if (!currentLayer) {
+      throw new BadRequestException('Approval layer tidak ditemukan');
+    }
+
+    // Update status based on current approver type
+    if (currentLayer.approver_type === ApproverType.MANAGER) {
+      request.status = RequestStatus.MANAGER_APPROVED;
+    } else if (currentLayer.approver_type === ApproverType.DIRECTOR) {
+      request.status = RequestStatus.DIRECTOR_APPROVED;
+    }
+
+    // Check if there's next approval level
+    const nextLayer = approvalLayers.find(layer => layer.approval_level === request.current_approval_level + 1);
+    
+    if (nextLayer) {
+      // Move to next approval level
+      request.current_approval_level = nextLayer.approval_level;
+      
+      if (nextLayer.approver_type === ApproverType.MANAGER) {
+        request.status = RequestStatus.PENDING_MANAGER_APPROVAL;
+      } else if (nextLayer.approver_type === ApproverType.DIRECTOR) {
+        request.status = RequestStatus.PENDING_DIRECTOR_APPROVAL;
+      } else if (nextLayer.approver_type === ApproverType.PURCHASING) {
+        request.status = RequestStatus.PENDING_PURCHASING_APPROVAL;
+      }
+    } else {
+      // No more approval layers, check if we need purchasing approval
+      if (currentLayer.approver_type !== ApproverType.PURCHASING) {
+        request.status = RequestStatus.PENDING_PURCHASING_APPROVAL;
+        request.current_approval_level = request.current_approval_level + 1;
+      } else {
+        // Purchasing approved, fully approved
+        request.status = RequestStatus.FULLY_APPROVED;
+      }
+    }
+
+    // Use update instead of save to avoid potential cascade issues
+    await this.requestRepository.update(request.id, {
+      status: request.status,
+      current_approval_level: request.current_approval_level,
+    });
   }
 
-  async hold(id: number, holdRequestDto: HoldRequestDto): Promise<Request> {
-    // TODO: Implement hold logic
-    // This will be implemented in next iteration
+  async reject(id: number, rejectRequestDto: RejectRequestDto, currentUserData: CurrentUserData): Promise<Request> {
+    const request = await this.findOneInternal(id);
     
-    throw new BadRequestException('Fitur hold belum diimplementasi');
+    // Get current user
+    const currentUser = await this.userRepository.findOne({
+      where: { id: currentUserData.id },
+      relations: ['department'],
+    });
+
+    if (!currentUser) {
+      throw new NotFoundException('User tidak ditemukan');
+    }
+
+    // Check if user has permission to reject
+    await this.checkRejectPermission(request, currentUser);
+
+    // Get or create approver record for current user and request department
+    let approver = await this.approverRepository.findOne({
+      where: {
+        user_id: currentUser.id,
+        department_id: request.department_id,
+      },
+    });
+
+    // For admin and purchasing, create virtual approver if not exists
+    if (!approver && (currentUser.role === UserRole.ADMIN || currentUser.role === UserRole.PURCHASING)) {
+      // Create virtual approver for admin/purchasing
+      approver = this.approverRepository.create({
+        user_id: currentUser.id,
+        department_id: request.department_id,
+        approver_type: ApproverType.PURCHASING,
+        approval_level: 999,
+      });
+      
+      approver = await this.approverRepository.save(approver);
+    }
+
+    if (!approver && currentUser.role !== UserRole.ADMIN && currentUser.role !== UserRole.PURCHASING) {
+      throw new ForbiddenException('Anda tidak memiliki akses untuk reject request ini');
+    }
+
+    if (!approver) {
+      throw new ForbiddenException('Approver record tidak ditemukan');
+    }
+
+    // Create rejection log
+    const approvalLog = this.approvalLogRepository.create({
+      request_id: id,
+      approver_id: approver.id,
+      approval_status: ApprovalStatus.REJECTED,
+      notes: rejectRequestDto.notes,
+    });
+
+    await this.approvalLogRepository.save(approvalLog);
+
+    // Update request status to rejected
+    request.status = RequestStatus.REJECTED;
+    request.status_note = rejectRequestDto.notes;
+    await this.requestRepository.update(request.id, {
+      status: request.status,
+      status_note: request.status_note,
+    });
+
+    return await this.findOneInternal(id);
+  }
+
+  private async checkRejectPermission(request: Request, currentUser: User) {
+    // Staff cannot reject
+    if (currentUser.role === UserRole.STAFF) {
+      throw new ForbiddenException('Staff tidak dapat melakukan rejection');
+    }
+
+    // Admin and purchasing can reject anytime (except completed/cancelled)
+    if (currentUser.role === UserRole.ADMIN || currentUser.role === UserRole.PURCHASING) {
+      if (request.status === RequestStatus.COMPLETED || request.status === RequestStatus.CANCELLED) {
+        throw new BadRequestException('Request yang sudah completed atau cancelled tidak dapat direject');
+      }
+      return;
+    }
+
+    // Manager and Director can only reject when it's their turn
+    const validStatuses = [
+      RequestStatus.PENDING_MANAGER_APPROVAL,
+      RequestStatus.PENDING_DIRECTOR_APPROVAL,
+      RequestStatus.DIRECTOR_APPROVED,
+    ];
+
+    if (!validStatuses.includes(request.status)) {
+      throw new BadRequestException('Request tidak dalam status yang dapat direject');
+    }
+  }
+
+  async cancel(id: number, currentUserData: CurrentUserData): Promise<Request> {
+    const request = await this.findOneInternal(id);
+    
+    // Get current user
+    const currentUser = await this.userRepository.findOne({
+      where: { id: currentUserData.id },
+    });
+
+    if (!currentUser) {
+      throw new NotFoundException('User tidak ditemukan');
+    }
+
+    // Only staff who created the request can cancel, or admin/purchasing
+    if (currentUser.role === UserRole.STAFF) {
+      if (request.user_id !== currentUser.id) {
+        throw new ForbiddenException('Staff hanya bisa cancel request yang dibuat sendiri');
+      }
+    } else if (currentUser.role !== UserRole.ADMIN && currentUser.role !== UserRole.PURCHASING) {
+      throw new ForbiddenException('Hanya staff pembuat request, admin, atau purchasing yang bisa cancel request');
+    }
+
+    // Cannot cancel completed request
+    if (request.status === RequestStatus.COMPLETED) {
+      throw new BadRequestException('Request yang sudah completed tidak dapat dicancel');
+    }
+
+    // Update status to cancelled
+    request.status = RequestStatus.CANCELLED;
+    await this.requestRepository.save(request);
+
+    return await this.findOneInternal(id);
+  }
+
+  async complete(id: number, currentUserData: CurrentUserData): Promise<Request> {
+    const request = await this.findOneInternal(id);
+    
+    // Get current user
+    const currentUser = await this.userRepository.findOne({
+      where: { id: currentUserData.id },
+    });
+
+    if (!currentUser) {
+      throw new NotFoundException('User tidak ditemukan');
+    }
+
+    // Only admin and purchasing can complete
+    if (currentUser.role !== UserRole.ADMIN && currentUser.role !== UserRole.PURCHASING) {
+      throw new ForbiddenException('Hanya admin atau purchasing yang bisa complete request');
+    }
+
+    // Can only complete if status is IN_PROCESS
+    if (request.status !== RequestStatus.IN_PROCESS) {
+      throw new BadRequestException('Request harus dalam status IN_PROCESS untuk bisa dicomplete');
+    }
+
+    // Update status to completed
+    request.status = RequestStatus.COMPLETED;
+    await this.requestRepository.save(request);
+
+    return await this.findOneInternal(id);
+  }
+
+  async hold(id: number, holdRequestDto: HoldRequestDto, currentUserData: CurrentUserData): Promise<Request> {
+    const request = await this.findOneInternal(id);
+    
+    // Get current user
+    const currentUser = await this.userRepository.findOne({
+      where: { id: currentUserData.id },
+    });
+
+    if (!currentUser) {
+      throw new NotFoundException('User tidak ditemukan');
+    }
+
+    // Only admin and purchasing can hold
+    if (currentUser.role !== UserRole.ADMIN && currentUser.role !== UserRole.PURCHASING) {
+      throw new ForbiddenException('Hanya admin atau purchasing yang bisa hold request');
+    }
+
+    // Cannot hold completed or cancelled request
+    if (request.status === RequestStatus.COMPLETED || request.status === RequestStatus.CANCELLED) {
+      throw new BadRequestException('Request yang sudah completed atau cancelled tidak dapat dihold');
+    }
+
+    // Update status to on hold
+    request.status = RequestStatus.ON_HOLD;
+    request.status_note = holdRequestDto.notes;
+    await this.requestRepository.save(request);
+
+    return await this.findOneInternal(id);
+  }
+
+  async processRequest(id: number, currentUserData: CurrentUserData): Promise<Request> {
+    const request = await this.findOneInternal(id);
+    
+    // Get current user
+    const currentUser = await this.userRepository.findOne({
+      where: { id: currentUserData.id },
+    });
+
+    if (!currentUser) {
+      throw new NotFoundException('User tidak ditemukan');
+    }
+
+    // Only admin and purchasing can process
+    if (currentUser.role !== UserRole.ADMIN && currentUser.role !== UserRole.PURCHASING) {
+      throw new ForbiddenException('Hanya admin atau purchasing yang bisa memproses request');
+    }
+
+    // Can only process if status is FULLY_APPROVED
+    if (request.status !== RequestStatus.FULLY_APPROVED) {
+      throw new BadRequestException('Request harus dalam status FULLY_APPROVED untuk bisa diproses');
+    }
+
+    // Update status to in process
+    request.status = RequestStatus.IN_PROCESS;
+    await this.requestRepository.save(request);
+
+    return await this.findOneInternal(id);
   }
 
   private async generateRequestCode(): Promise<string> {
