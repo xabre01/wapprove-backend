@@ -8,6 +8,7 @@ import { DepartmentModule } from './modules/department/department.module';
 import { UserModule } from './modules/user/user.module';
 import { AccountModule } from './modules/account/account.module';
 import { ApproverModule } from './modules/approver/approver.module';
+import { RequestModule } from './modules/request/request.module';
 import { entities } from './entities';
 import databaseConfig from './config/database.config';
 import jwtConfig from './config/jwt.config';
@@ -31,6 +32,7 @@ import jwtConfig from './config/jwt.config';
     UserModule,
     AccountModule,
     ApproverModule,
+    RequestModule,
   ],
   controllers: [AppController],
   providers: [AppService],
