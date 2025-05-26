@@ -17,6 +17,7 @@ import {
   HoldRequestDto,
 } from './dto';
 import { PaginationMeta, CurrentUserData } from '../../common/interfaces';
+import { NotificationService } from '../notifications/notification.service';
 
 @Injectable()
 export class RequestService {
@@ -33,6 +34,7 @@ export class RequestService {
     private readonly approverRepository: Repository<Approver>,
     @InjectRepository(ApprovalLog)
     private readonly approvalLogRepository: Repository<ApprovalLog>,
+    private readonly notificationService: NotificationService,
   ) {}
 
   async create(createRequestDto: CreateRequestDto): Promise<Request> {
@@ -94,6 +96,16 @@ export class RequestService {
     );
 
     await this.requestItemRepository.save(requestItems);
+
+    // Send approval notifications if request is in approval status
+    if (savedRequest.status !== RequestStatus.DRAFT) {
+      try {
+        await this.notificationService.sendApprovalNotifications(savedRequest.id);
+      } catch (error) {
+        console.error('Failed to send approval notifications:', error);
+        // Don't fail the request creation if notification fails
+      }
+    }
 
     // Return with relations
     return await this.findOneInternal(savedRequest.id);
@@ -268,7 +280,7 @@ export class RequestService {
           .where('approver.user_id = :directorId', { directorId: currentUser.id })
           .getRawMany();
 
-        const departmentIds = directorDepartments.map(dept => dept.approver_department_id);
+        const departmentIds = directorDepartments.map(dept => dept.department_id);
 
         if (departmentIds.length === 0) {
           // Jika director tidak terdaftar sebagai approver di department manapun
@@ -532,6 +544,28 @@ export class RequestService {
       }
     }
 
+    // Send approval notifications if request is in approval status
+    if (request.status !== RequestStatus.DRAFT) {
+      try {
+        await this.notificationService.sendApprovalNotifications(request.id);
+      } catch (error) {
+        console.error('Failed to send approval notifications:', error);
+        // Don't fail the request approval if notification fails
+      }
+    }
+
+    // Send status update notification to requester
+    try {
+      await this.notificationService.sendStatusUpdateNotification(
+        request.id,
+        request.status,
+        currentUser.name,
+        approveRequestDto.notes,
+      );
+    } catch (error) {
+      console.error('Failed to send status update notification:', error);
+    }
+
     return await this.findOneInternal(id);
   }
 
@@ -717,6 +751,18 @@ export class RequestService {
       status: request.status,
       status_note: request.status_note,
     });
+
+    // Send status update notification to requester
+    try {
+      await this.notificationService.sendStatusUpdateNotification(
+        request.id,
+        request.status,
+        currentUser.name,
+        rejectRequestDto.notes,
+      );
+    } catch (error) {
+      console.error('Failed to send status update notification:', error);
+    }
 
     return await this.findOneInternal(id);
   }
