@@ -9,7 +9,6 @@ import { TwilioService } from './twilio.service';
 import { Notification } from '../../entities/notification.entity';
 import { Request } from '../../entities/request.entity';
 import { User } from '../../entities/user.entity';
-import { Approver } from '../../entities/approver.entity';
 import { RequestModule } from '../request/request.module';
 import twilioConfig from '../../config/twilio.config';
 
@@ -20,7 +19,6 @@ import twilioConfig from '../../config/twilio.config';
       Notification,
       Request,
       User,
-      Approver,
     ]),
     forwardRef(() => RequestModule),
   ],

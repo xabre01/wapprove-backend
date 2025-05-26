@@ -100,7 +100,7 @@ export class RequestService {
     // Send approval notifications if request is in approval status
     if (savedRequest.status !== RequestStatus.DRAFT) {
       try {
-        await this.notificationService.sendApprovalNotifications(savedRequest.id);
+        await this.sendApprovalNotificationsForRequest(savedRequest);
       } catch (error) {
         console.error('Failed to send approval notifications:', error);
         // Don't fail the request creation if notification fails
@@ -547,7 +547,7 @@ export class RequestService {
     // Send approval notifications if request is in approval status
     if (request.status !== RequestStatus.DRAFT) {
       try {
-        await this.notificationService.sendApprovalNotifications(request.id);
+        await this.sendApprovalNotificationsForRequest(request);
       } catch (error) {
         console.error('Failed to send approval notifications:', error);
         // Don't fail the request approval if notification fails
@@ -556,12 +556,15 @@ export class RequestService {
 
     // Send status update notification to requester
     try {
-      await this.notificationService.sendStatusUpdateNotification(
-        request.id,
-        request.status,
-        currentUser.name,
-        approveRequestDto.notes,
-      );
+      await this.notificationService.sendStatusUpdateNotificationToUser({
+        phoneNumber: request.user.phone_number,
+        requestCode: request.request_code,
+        status: request.status,
+        approverName: currentUser.name,
+        notes: approveRequestDto.notes,
+        userId: request.user.id,
+        requestId: request.id,
+      });
     } catch (error) {
       console.error('Failed to send status update notification:', error);
     }
@@ -687,6 +690,27 @@ export class RequestService {
       status: request.status,
       current_approval_level: request.current_approval_level,
     });
+
+    // Setelah move ke level berikutnya, kirim notifikasi ke approver di level baru
+    // Tapi hanya jika masih dalam status pending approval
+    if (request.status === RequestStatus.PENDING_MANAGER_APPROVAL || 
+        request.status === RequestStatus.PENDING_DIRECTOR_APPROVAL || 
+        request.status === RequestStatus.PENDING_PURCHASING_APPROVAL) {
+      
+      // Get updated request with relations for notification
+      const updatedRequest = await this.requestRepository.findOne({
+        where: { id: request.id },
+        relations: ['user'],
+      });
+
+      if (updatedRequest) {
+        try {
+          await this.sendApprovalNotificationsForRequest(updatedRequest);
+        } catch (error) {
+          console.error('Failed to send approval notifications after level change:', error);
+        }
+      }
+    }
   }
 
   async reject(id: number, rejectRequestDto: RejectRequestDto, currentUserData: CurrentUserData): Promise<Request> {
@@ -754,12 +778,15 @@ export class RequestService {
 
     // Send status update notification to requester
     try {
-      await this.notificationService.sendStatusUpdateNotification(
-        request.id,
-        request.status,
-        currentUser.name,
-        rejectRequestDto.notes,
-      );
+      await this.notificationService.sendStatusUpdateNotificationToUser({
+        phoneNumber: request.user.phone_number,
+        requestCode: request.request_code,
+        status: request.status,
+        approverName: currentUser.name,
+        notes: rejectRequestDto.notes,
+        userId: request.user.id,
+        requestId: request.id,
+      });
     } catch (error) {
       console.error('Failed to send status update notification:', error);
     }
@@ -936,5 +963,148 @@ export class RequestService {
     }
 
     return `${prefix}-${String(sequence).padStart(4, '0')}`;
+  }
+
+  private async sendApprovalNotificationsForRequest(request: Request): Promise<void> {
+    // Kirim notifikasi approval hanya ke Manager dan Director
+    // TIDAK kirim ke Admin dan Purchasing (mereka approve via dashboard)
+    
+    const approver = await this.getSingleApproverForNotification(request);
+    
+    if (!approver) {
+      // Cek apakah ini adalah level purchasing/admin
+      if (request.status === RequestStatus.PENDING_PURCHASING_APPROVAL || 
+          request.current_approval_level >= 999) {
+        console.log(`ℹ️ Request ${request.request_code} is at purchasing/admin level - NO WhatsApp notification sent (they will approve via dashboard)`);
+      } else {
+        console.log(`❌ No approver found for WhatsApp notification for request ${request.request_code} at level ${request.current_approval_level}`);
+      }
+      return;
+    }
+
+    // Calculate total amount
+    const requestWithItems = await this.requestRepository.findOne({
+      where: { id: request.id },
+      relations: ['request_items', 'user'],
+    });
+
+    const totalAmount = requestWithItems.request_items.reduce(
+      (sum, item) => sum + (item.quantity * item.unit_price), 
+      0
+    );
+
+    console.log(`📱 Sending WhatsApp approval notification for request ${request.request_code} to ${approver.userName} at level ${request.current_approval_level}`);
+
+    // Send notification to manager/director only
+    await this.notificationService.sendApprovalNotificationToUser({
+      phoneNumber: approver.phoneNumber,
+      userName: approver.userName,
+      requestCode: request.request_code,
+      requesterName: requestWithItems.user.name,
+      totalAmount,
+      approvalLevel: approver.approvalLevel,
+      userId: approver.userId,
+      requestId: request.id,
+    });
+  }
+
+  private async getSingleApproverForNotification(request: Request): Promise<{
+    userId: number;
+    phoneNumber: string;
+    userName: string;
+    approvalLevel: string;
+  } | null> {
+    console.log(`🔍 Looking for approver at level ${request.current_approval_level} for department ${request.department_id}`);
+    
+    const approvalLayers = await this.getApprovalLayers(request.department_id);
+    console.log(`📋 Found ${approvalLayers.length} approval layers:`, 
+      approvalLayers.map(l => `Level ${l.approval_level} (${l.approver_type})`));
+    
+    // Find current layer based on current_approval_level
+    const currentLayer = approvalLayers.find(layer => layer.approval_level === request.current_approval_level);
+    
+    if (!currentLayer) {
+      console.log(`❌ No approval layer found for level ${request.current_approval_level}`);
+      
+      // JANGAN kirim notifikasi ke admin/purchasing
+      // Mereka akan approve via dashboard saja
+      if (request.status === RequestStatus.PENDING_PURCHASING_APPROVAL || 
+          request.current_approval_level >= 999) {
+        console.log(`💼 Purchasing level reached - NO WhatsApp notification sent to admin/purchasing`);
+        return null;
+      }
+      
+      // Fallback 2: Check if we've exceeded normal layers, go to purchasing
+      if (approvalLayers.length > 0) {
+        const maxLayer = Math.max(...approvalLayers.map(l => l.approval_level));
+        if (request.current_approval_level > maxLayer) {
+          console.log(`📈 Current level ${request.current_approval_level} > max layer ${maxLayer} - NO WhatsApp notification for purchasing`);
+          return null;
+        }
+      }
+      
+      console.log(`💥 No valid approver for WhatsApp notification at level ${request.current_approval_level}`);
+      return null;
+    }
+
+    console.log(`✅ Found current layer: Level ${currentLayer.approval_level} (${currentLayer.approver_type})`);
+
+    // STOP! Jika ini adalah purchasing type, JANGAN kirim notifikasi WhatsApp
+    if (currentLayer.approver_type === ApproverType.PURCHASING) {
+      console.log(`🚫 Purchasing type detected - NO WhatsApp notification sent to admin/purchasing`);
+      return null;
+    }
+
+    // Hanya lanjutkan untuk MANAGER dan DIRECTOR
+    if (currentLayer.approver_type !== ApproverType.MANAGER && 
+        currentLayer.approver_type !== ApproverType.DIRECTOR) {
+      console.log(`🚫 Approver type ${currentLayer.approver_type} - NO WhatsApp notification`);
+      return null;
+    }
+
+    // Get approver at current level - hanya untuk Manager dan Director
+    const approver = await this.approverRepository.findOne({
+      where: {
+        department_id: request.department_id,
+        approval_level: request.current_approval_level,
+      },
+      relations: ['user'],
+    });
+
+    if (!approver) {
+      console.log(`❌ No approver record found for department ${request.department_id} at level ${request.current_approval_level}`);
+      return null;
+    }
+
+    if (!approver.user) {
+      console.log(`❌ Approver ${approver.id} has no user relation`);
+      return null;
+    }
+
+    if (!approver.user.phone_number) {
+      console.log(`📱 User ${approver.user.name} has no phone number - skipping WhatsApp notification`);
+      return null;
+    }
+
+    console.log(`🎯 Found manager/director approver: ${approver.user.name} (${approver.user.phone_number})`);
+    
+    return {
+      userId: approver.user.id,
+      phoneNumber: approver.user.phone_number,
+      userName: approver.user.name,
+      approvalLevel: this.getApprovalLevelNameFromApprover(approver),
+    };
+  }
+
+  private getApprovalLevelNameFromApprover(approver: Approver): string {
+    if (approver.approver_type === ApproverType.MANAGER) {
+      return `Manager Approval (Level ${approver.approval_level})`;
+    } else if (approver.approver_type === ApproverType.DIRECTOR) {
+      return `Director Approval (Level ${approver.approval_level})`;
+    } else if (approver.approver_type === ApproverType.PURCHASING) {
+      return 'Purchasing Approval';
+    }
+
+    return `Level ${approver.approval_level} Approval`;
   }
 } 
