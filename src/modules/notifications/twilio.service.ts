@@ -66,14 +66,24 @@ export class TwilioService {
     phoneNumber: string,
     requestCode: string,
     requesterName: string,
+    description: string,
     totalAmount: number,
     approvalLevel: string,
+    requestItems?: Array<{
+      item_name: string;
+      quantity: number;
+      unit_price: number;
+      total_price: number;
+      category: string;
+    }>,
   ): Promise<WhatsAppResponse> {
     const message = this.formatApprovalMessage(
       requestCode,
       requesterName,
+      description,
       totalAmount,
       approvalLevel,
+      requestItems,
     );
 
     return this.sendWhatsAppMessage({
@@ -105,23 +115,47 @@ export class TwilioService {
   private formatApprovalMessage(
     requestCode: string,
     requesterName: string,
+    description: string,
     totalAmount: number,
     approvalLevel: string,
+    requestItems?: Array<{
+      item_name: string;
+      quantity: number;
+      unit_price: number;
+      total_price: number;
+      category: string;
+    }>,
   ): string {
-    return `🔔 *APPROVAL REQUEST*
+    let message = `🔔 *APPROVAL REQUEST*
 
 📋 Request: ${requestCode}
 👤 Requester: ${requesterName}
-💰 Amount: Rp ${totalAmount}
-📊 Level: ${approvalLevel}
+📝 Description: ${description}
+💰 Total Amount: Rp ${this.formatNumber(totalAmount)}
+📊 Level: ${approvalLevel}`;
 
-Please review and approve/reject this request.
+    // Add request items details
+    if (requestItems && requestItems.length > 0) {
+      message += `\n\n📦 *ITEM DETAILS:*`;
+      
+      requestItems.forEach((item, index) => {
+        message += `\n\n${index + 1}. ${item.item_name}`;
+        message += `\n   📁 Category: ${item.category}`;
+        message += `\n   🔢 Qty: ${item.quantity}`;
+        message += `\n   💵 Unit Price: Rp ${this.formatNumber(item.unit_price)}`;
+        message += `\n   💰 Total: Rp ${this.formatNumber(item.total_price)}`;
+      });
+    }
+
+    message += `\n\nPlease review and approve/reject this request.
 
 Reply with:
 • *APPROVE ${requestCode}* - to approve
 • *REJECT ${requestCode} [reason]* - to reject
 
 Thank you! 🙏`;
+
+    return message;
   }
 
   private formatStatusUpdateMessage(
@@ -181,5 +215,9 @@ Thank you! 🙏`;
       this.logger.error(`Webhook signature validation failed: ${error.message}`);
       return false;
     }
+  }
+
+  private formatNumber(amount: number): string {
+    return new Intl.NumberFormat('id-ID').format(amount);
   }
 } 

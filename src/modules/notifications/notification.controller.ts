@@ -14,8 +14,16 @@ export class TestNotificationDto {
   phoneNumber: string;
   requestCode: string;
   requesterName: string;
+  description: string;
   totalAmount: number;
   approvalLevel: string;
+  requestItems?: Array<{
+    item_name: string;
+    quantity: number;
+    unit_price: number;
+    total_price: number;
+    category: string;
+  }>;
 }
 
 @Controller('notifications')
@@ -32,8 +40,10 @@ export class NotificationController {
       testDto.phoneNumber,
       testDto.requestCode,
       testDto.requesterName,
+      testDto.description,
       testDto.totalAmount,
       testDto.approvalLevel,
+      testDto.requestItems,
     );
 
     return {

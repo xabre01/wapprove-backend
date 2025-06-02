@@ -10,10 +10,18 @@ export interface ApprovalNotificationData {
   userName: string;
   requestCode: string;
   requesterName: string;
+  description: string;
   totalAmount: number;
   approvalLevel: string;
   userId: number;
   requestId: number;
+  requestItems?: Array<{
+    item_name: string;
+    quantity: number;
+    unit_price: number;
+    total_price: number;
+    category: string;
+  }>;
 }
 
 export interface StatusUpdateNotificationData {
@@ -52,8 +60,10 @@ export class NotificationService {
         data.phoneNumber,
         data.requestCode,
         data.requesterName,
+        data.description,
         data.totalAmount,
         data.approvalLevel,
+        data.requestItems,
       );
 
       await this.saveNotificationLog(

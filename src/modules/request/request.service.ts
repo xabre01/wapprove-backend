@@ -986,7 +986,7 @@ export class RequestService {
       return;
     }
 
-    // Calculate total amount
+    // Get request with items and user data
     const requestWithItems = await this.requestRepository.findOne({
       where: { id: request.id },
       relations: ['request_items', 'user'],
@@ -997,6 +997,15 @@ export class RequestService {
       0
     );
 
+    // Format request items for notification
+    const requestItems = requestWithItems.request_items.map(item => ({
+      item_name: item.item_name,
+      quantity: item.quantity,
+      unit_price: Number(item.unit_price),
+      total_price: Number(item.total_price),
+      category: item.category,
+    }));
+
     console.log(`📱 Sending WhatsApp approval notification for request ${request.request_code} to ${approver.userName} at level ${request.current_approval_level}`);
 
     // Send notification to manager/director only
@@ -1005,10 +1014,12 @@ export class RequestService {
       userName: approver.userName,
       requestCode: request.request_code,
       requesterName: requestWithItems.user.name,
+      description: requestWithItems.description,
       totalAmount,
       approvalLevel: approver.approvalLevel,
       userId: approver.userId,
       requestId: request.id,
+      requestItems,
     });
   }
 
