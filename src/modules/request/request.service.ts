@@ -958,8 +958,12 @@ export class RequestService {
 
     let sequence = 1;
     if (latestRequest) {
-      const lastSequence = latestRequest.request_code.split('-')[1];
-      sequence = parseInt(lastSequence.substring(8)) + 1;
+      const lastSequence = latestRequest.request_code.split('-')[2];
+      sequence = parseInt(lastSequence) + 1;
+      
+      if (isNaN(sequence)) {
+        sequence = 1;
+      }
     }
 
     return `${prefix}-${String(sequence).padStart(4, '0')}`;
